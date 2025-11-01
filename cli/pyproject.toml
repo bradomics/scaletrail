@@ -9,10 +9,14 @@ description = "ScaleTrail CLI"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-  "typer[all]>=0.12",
+  "typer>=0.12",
   "rich>=13",
   "pyfiglet>=0.8",
-  "rich-pyfiglet>=1.0.0"
+  "rich-pyfiglet>=1.0.0",
+  "inquirer>=3.2.3",
+  "tomlkit>=0.13.3",
+  "python-dotenv>=1.2.1",
+  "requests>=2.32.5",
 ]
 
 # This creates the shell command `scaletrail`
@@ -21,3 +25,8 @@ scaletrail = "scaletrail.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["scaletrail*"]
+exclude = [
+  "cli_venv*", "build*", "dist*", "*.egg-info*", "tests*", "test*", ".venv*", "venv*",
+  ".idea*", ".vscode*", "scratchnotes*"
+]
