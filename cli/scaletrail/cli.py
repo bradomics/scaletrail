@@ -197,9 +197,10 @@ def init(
             console.print(f"\n[bold]Environment:[/bold] {env}")
             console.print(f"Pick a size for the '{env}' environment (region: {linode_region})\n")
             selected = linode.choose_instance(
-                instances
+                instances,
+                message=f"Select a Linode plan for {env}"
             )
-            selected_os = linode.choose_os(oses)
+            selected_os = linode.choose_os(oses, message=f"Select a Linode OS for {env}")
             if not selected:
                 console.print(f"[red]No instance selected for {env}. Aborting.[/red]")
                 raise typer.Exit(1)
@@ -207,7 +208,7 @@ def init(
             env_os_choices[env] = selected_os["id"]
             console.print(f"→ {env}: [bold]{selected['label']}[/bold] ({selected['id']})")
 
-            env_backups_enabled[env] = typer.prompt("Backups enabled? (y/n)").lower() == "y"
+            env_backups_enabled[env] = typer.prompt(f"Enable backups for {env}? (y/n)").lower() == "y"
             env_instance_tags[env] = typer.prompt(f"Tags for {env} instance (comma-separated)")
             env_stripe_api_keys[env] = typer.prompt(f"Stripe API key ({env})")
             env_sendgrid_api_keys[env] = typer.prompt(f"SendGrid API key ({env})")
@@ -217,7 +218,7 @@ def init(
         raise typer.Exit(1)
 
     if not domain_to_configure:
-        domain_to_configure = typer.prompt("Domain to configure (e.g., example.com)")
+        domain_to_configure = typer.prompt("\nDomain to configure (e.g., example.com)")
 
         # Get Zone ID via Cloudflare
         domain_zone_id = cloudflare.get_cloudflare_zone_id(domain_to_configure, cloudflare_api_key)
@@ -227,7 +228,7 @@ def init(
             if env == "prod":
                 # TODO: Turn these statements into a function
                 if cloudflare.root_domain_is_availabile(dns_records, domain_to_configure):
-                    console.print(f"The root domain [bold]{domain_to_configure}[/bold] is available!\n It will be used to host the [bold]front end[/bold] server for the [bold][{formatting.ENV_COLORS[env]}]production[/{formatting.ENV_COLORS[env]}][/bold] environment.\n")
+                    console.print(f"[bold]{domain_to_configure}[/bold] (the root domain) is available!\n It will be used to host the [bold]front end[/bold] server for the [bold][{formatting.ENV_COLORS[env]}]production[/{formatting.ENV_COLORS[env]}][/bold] environment.\n")
                 else:
                     console.print(f"[red][bold]Warning![/bold] The root domain [bold]{domain_to_configure}[/bold] has an existing A or CNAME record! It will be overwritten![/red]\n")
 
@@ -249,7 +250,7 @@ def init(
                 if cloudflare.subdomain_is_available(dns_records, f"{env}-api", domain_to_configure):
                     console.print(f"[bold]{env}-api.{domain_to_configure}[/bold] subdomain is available!\nIt will be used to host the [bold]back end[/bold] server for the [bold][{formatting.ENV_COLORS[env]}]{env}[/{formatting.ENV_COLORS[env]}][/bold] environment.\n")
                 else:
-                    console.print(f"[red][bold]{env}-api.{domain_to_configure}[/bold] subdomain is already taken![/red]\n")
+                    console.print(f"[red][bold]{env}-api.{domain_to_configure}[/bold] subdomain is already taken![/red]\n")            
 
     # Persist full configuration as TOML — one file per environment
     out_dir = Path.cwd() / "config"

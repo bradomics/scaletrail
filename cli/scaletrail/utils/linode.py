@@ -104,7 +104,7 @@ def _pick_backup_price(item: Dict[str, Any], region_id: str) -> Optional[Dict[st
 
     return {"hourly": float(hourly), "monthly": float(monthly)}
 
-def choose_instance(instances: list, message: str = "Select a Linode plan for (env) TODO: add env name here for readability"):
+def choose_instance(instances: list, message: str = "Select a Linode plan for the environment"):
     instances_sorted = sorted(instances, key=lambda x: x.get("price_monthly", 0))
 
     header = (
