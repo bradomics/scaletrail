@@ -166,21 +166,44 @@ def init(
         envs = select_environments()
         console.print('Available Linode instance types:')
         # region_id could be "us-east", "us-ord", "br-gru", "id-cgk", etc.
-        instances = linode.get_instances_for_region(response.json(), region_id="br-gru",
+        instances = linode.get_instances_for_region(response.json(), region_id=linode_region,
             include_classes=["nanode","standard","dedicated","premium"])
+        
+        # After you pick `linode_region` and have a Linode API key:
+        imgs_url = "https://api.linode.com/v4/images"
+        headers = {
+            "Accept": "application/json",
+            # IMPORTANT: Linode expects a Bearer token here:
+            "Authorization": linode_api_key,
+        }
+        imgs_resp = requests.get(imgs_url, headers=headers).json()
+
+        # Filter to OSes available in the chosen region:
+        oses = linode.get_operating_systems_for_region(
+            imgs_resp,
+            region_id=linode_region,
+            include_vendors=["AlmaLinux", "Alpine", "Arch", "CentOS", "Debian", "Fedora", "Kali", "Gentoo", "OpenSuse", "Rocky Linux", "Slackware", "Ubuntu"],   # or e.g. ["Ubuntu", "Debian", "AlmaLinux", "Rocky Linux"]
+            public_only=True,
+            exclude_eol=True,
+        )
 
         env_instance_types: Dict[str, str] = {}
+        env_os_choices: Dict[str, str] = {}
         for env in envs:
             console.print(f"\n[bold]Environment:[/bold] {env}")
             console.print(f"Pick a size for the '{env}' environment (region: {linode_region})\n")
             selected = linode.choose_instance(
                 instances
             )
+            selected_os = linode.choose_os(oses)
             if not selected:
                 console.print(f"[red]No instance selected for {env}. Aborting.[/red]")
                 raise typer.Exit(1)
             env_instance_types[env] = selected["id"]
+            env_os_choices[env] = selected_os["id"]
+            print('OS choices: ', env_os_choices)
             console.print(f"→ {env}: [bold]{selected['label']}[/bold] ({selected['id']})")
+
 
     if not linode_region:
         raise typer.Exit(1)
@@ -190,7 +213,6 @@ def init(
 
         # Get Zone ID via Cloudflare
         domain_zone_id = cloudflare.get_cloudflare_zone_id(domain_to_configure, cloudflare_api_key)
-        print('here is the domain_zone_id', domain_zone_id)
         dns_records = cloudflare.get_cloudflare_dns_records(domain_zone_id, cloudflare_api_key)
 
         for env in envs:
@@ -243,6 +265,7 @@ def init(
     for env_name in envs:
         # pick the instance type for this env (guard in case of missing key)
         instance_id = env_instance_types.get(env_name, "")
+        image_id = env_os_choices.get(env_name, "")
 
         config_data = {
             "project": {
@@ -255,11 +278,11 @@ def init(
             },
             "linode": {
                 "region": linode_region,
-                "image": image,
                 "backups_enabled": bool(backups_enabled),
                 "tags": [t.strip() for t in tags.split(",")] if tags else [],
                 # keep a single env block in each file for clarity
                 "instance_type": instance_id,
+                "image": image_id,
             },
             "cloudflare": {
                 "account_id_saved": bool(cloudflare_account_id),
