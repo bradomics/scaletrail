@@ -19,7 +19,7 @@ def get_cloudflare_zone_id(domain: str, cloudflare_api_key: str) -> Optional[str
     if response.status_code == 200:
         data = response.json()
         if data.get("success") and data.get("result"):
-            print(f"cloudflare zone ID for domain {domain} is {data['result'][0]['id']}")
+            print(f"Cloudflare zone ID for domain {domain} is {data['result'][0]['id']}\n")
             return data["result"][0]["id"]
     console.print(f"[red]Error fetching Zone ID for domain {domain}[/red]")
     return None
