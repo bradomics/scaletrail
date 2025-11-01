@@ -189,6 +189,10 @@ def init(
 
         env_instance_types: Dict[str, str] = {}
         env_os_choices: Dict[str, str] = {}
+        env_backups_enabled: Dict[str, bool] = {}
+        env_instance_tags: Dict[str, List[str]] = {}
+        env_stripe_api_keys: Dict[str, str] = {}
+        env_sendgrid_api_keys: Dict[str, str] = {}
         for env in envs:
             console.print(f"\n[bold]Environment:[/bold] {env}")
             console.print(f"Pick a size for the '{env}' environment (region: {linode_region})\n")
@@ -201,8 +205,12 @@ def init(
                 raise typer.Exit(1)
             env_instance_types[env] = selected["id"]
             env_os_choices[env] = selected_os["id"]
-            print('OS choices: ', env_os_choices)
             console.print(f"→ {env}: [bold]{selected['label']}[/bold] ({selected['id']})")
+
+            env_backups_enabled[env] = typer.prompt("Backups enabled? (y/n)").lower() == "y"
+            env_instance_tags[env] = typer.prompt(f"Tags for {env} instance (comma-separated)")
+            env_stripe_api_keys[env] = typer.prompt(f"Stripe API key ({env})")
+            env_sendgrid_api_keys[env] = typer.prompt(f"SendGrid API key ({env})")
 
 
     if not linode_region:
@@ -243,21 +251,6 @@ def init(
                 else:
                     console.print(f"[red][bold]{env}-api.{domain_to_configure}[/bold] subdomain is already taken![/red]\n")
 
-    if not image:
-        image = typer.prompt("Image")
-
-    if not backups_enabled:
-        backups_enabled = typer.prompt("Image")
-
-    if not tags:
-        tags = typer.prompt("Tags (comma-separated)")
-
-    if not stripe_api_key:
-        stripe_api_key = typer.prompt("Stripe API key")
-
-    if not sendgrid_api_key:
-        sendgrid_api_key = typer.prompt("SendGrid API key")
-
     # Persist full configuration as TOML — one file per environment
     out_dir = Path.cwd() / "config"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -265,7 +258,11 @@ def init(
     for env_name in envs:
         # pick the instance type for this env (guard in case of missing key)
         instance_id = env_instance_types.get(env_name, "")
+        env_instance_tags.get(env_name, "")
         image_id = env_os_choices.get(env_name, "")
+        stripe_api_key = env_stripe_api_keys.get(env_name, "")
+        sendgrid_api_key = env_sendgrid_api_keys.get(env_name, "")
+
 
         config_data = {
             "project": {
@@ -279,7 +276,7 @@ def init(
             "linode": {
                 "region": linode_region,
                 "backups_enabled": bool(backups_enabled),
-                "tags": [t.strip() for t in tags.split(",")] if tags else [],
+                "tags": [t.strip() for t in env_instance_tags[env_name].split(",")] if env_instance_tags else [],
                 # keep a single env block in each file for clarity
                 "instance_type": instance_id,
                 "image": image_id,
@@ -296,6 +293,13 @@ def init(
         # Write ./config/<env>-config.toml
         config_file = out_dir / f"{env_name}-config.toml"
         config_file.write_text(dumps(config_data), encoding="utf-8")
+
+        project_env_file = out_dir / f"{env_name}.env"
+        project_env_file.write_text(
+            f"STRIPE_API_KEY={stripe_api_key}\n"
+            f"SENDGRID_API_KEY={sendgrid_api_key}\n",
+            encoding="utf-8"
+        )
 
     env_list = ", ".join(envs)
     console.print(f"[green]Configs for [bold]{env_list}[/bold] have been saved to the [bold]config[/bold] folder.[/green]")
