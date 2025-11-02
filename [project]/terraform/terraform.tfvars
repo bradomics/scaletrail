@@ -1,26 +1,27 @@
-# Inbound IP rules for developers (dedicated VPN IP, home office, etc.)
-developer_inbound_ips = [
-  {
-    label    = "ssh-inbound-ips"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "22,80,443,3306"
-    ipv4     = [""]
-    ipv6     = [""]
-  }
-]
+# TODO: Add prompt to get these from user (allow 'do this later' option)
+# # Inbound IP rules for developers (dedicated VPN IP, home office, etc.)
+# developer_inbound_ips = [
+#   {
+#     label    = "ssh-inbound-ips"
+#     action   = "ACCEPT"
+#     protocol = "TCP"
+#     ports    = "22,80,443,3306"
+#     ipv4     = [""]
+#     ipv6     = [""]
+#   }
+# ]
 
-# Inbound IP rules for project integrations
-project_inbound_rules = [
-  {
-    label    = "project-inbound-rules"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "80,443"
-    ipv4     = [""]
-    ipv6     = [""]
-  }
-]
+# # Inbound IP rules for project integrations
+# project_inbound_rules = [
+#   {
+#     label    = "project-inbound-rules"
+#     action   = "ACCEPT"
+#     protocol = "TCP"
+#     ports    = "80,443"
+#     ipv4     = [""]
+#     ipv6     = [""]
+#   }
+# ]
 
 # Inbound IP rules to allow inbound traffic from Cloudflare
 # IPs subject to change. Get this list of IPs from: https://www.cloudflare.com/ips/

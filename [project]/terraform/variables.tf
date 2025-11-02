@@ -22,6 +22,7 @@ variable "cloudflare_inbound_rules" {
     ipv4     = list(string)
     ipv6     = list(string)
   }))
+  default = []
   description = "List of Cloudflare inbound firewall rules"
 }
 
@@ -34,16 +35,19 @@ variable "developer_inbound_ips" {
     ipv4     = list(string)
     ipv6     = list(string)
   }))
+  default = []
   description = "List of inbound firewall rules"
 }
 
 variable "gh_actions_ipv4" {
   type        = list(string)
+  default = []
   description = "List of GitHub Actions IPv4 CIDRs"
 }
 
 variable "gh_actions_ipv6" {
   type        = list(string)
+  default = []
   description = "List of GitHub Actions IPv6 CIDRs"
 }
 
@@ -56,6 +60,7 @@ variable "gh_actions_inbound_rules" {
     ipv4     = list(string)
     ipv6     = list(string)
   }))
+  default = []
   description = "A list of allowed inbound IPs for trusted Github API IPs"
 }
 
@@ -68,6 +73,7 @@ variable "project_inbound_rules" {
     ipv4     = list(string)
     ipv6     = list(string)
   }))
+  default = []
   description = "A list of allowed inbound IPs for HTTPs connections (i.e. project.com)"
 }
 
