@@ -12,6 +12,9 @@ from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 from rich_pyfiglet import RichFiglet
+from rich.table import Table
+from rich import box
+from rich.panel import Panel
 
 from .utils import cloudflare, formatting, linode, env_file
 
@@ -126,9 +129,10 @@ def init(
     # Allow CLI overrides: if both continent and region were provided, skip prompts
     if not linode_region:
         if not continent:
+            print("\n")
             ans = inquirer.prompt([
                 inquirer.List("continent",
-                    message="Select a continent (or show all regions)",
+                    message="Select a continent for your infrastructure (or show all regions)",
                     choices=linode.CONTINENT_CHOICES,
                     carousel=True)
             ]) or {}
@@ -164,7 +168,7 @@ def init(
 
         response = requests.request("GET", url, headers=headers, data=payload)
         envs = select_environments()
-        console.print('Available Linode instance types:')
+        console.print("Available Linode instance types:")
         # region_id could be "us-east", "us-ord", "br-gru", "id-cgk", etc.
         instances = linode.get_instances_for_region(response.json(), region_id=linode_region,
             include_classes=["nanode","standard","dedicated","premium"])
@@ -232,12 +236,12 @@ def init(
                 else:
                     console.print(f"[red][bold]Warning![/bold] The root domain [bold]{domain_to_configure}[/bold] has an existing A or CNAME record! It will be overwritten![/red]\n")
 
-                if cloudflare.subdomain_is_available(dns_records, 'www', domain_to_configure):
+                if cloudflare.subdomain_is_available(dns_records, "www", domain_to_configure):
                     console.print(f"[bold]www.{domain_to_configure}[/bold] subdomain is available!\n")
                 else:
                     console.print(f"[red][bold]Warning![/bold] The [bold]www.{domain_to_configure}[/bold] has an existing A or CNAME record! It will be overwritten![/red]\n")
 
-                if cloudflare.subdomain_is_available(dns_records, 'api', domain_to_configure):
+                if cloudflare.subdomain_is_available(dns_records, "api", domain_to_configure):
                     console.print(f"[bold]api.{domain_to_configure}[/bold] subdomain is available!\nIt will be used to host the [bold]back end[/bold] server for the [bold][{formatting.ENV_COLORS[env]}]production[/{formatting.ENV_COLORS[env]}][/bold] environment.\n")
                 else:
                     console.print(f"[red][bold]Warning![/bold] The [bold]api.{domain_to_configure}[/bold] has an existing A or CNAME record! It will be overwritten![/red]\n")
@@ -276,7 +280,7 @@ def init(
             },
             "linode": {
                 "region": linode_region,
-                "backups_enabled": bool(backups_enabled),
+                "backups_enabled": bool(env_backups_enabled[env_name]),
                 "tags": [t.strip() for t in env_instance_tags[env_name].split(",")] if env_instance_tags else [],
                 # keep a single env block in each file for clarity
                 "instance_type": instance_id,
@@ -306,11 +310,199 @@ def init(
     console.print(f"[green]Configs for [bold]{env_list}[/bold] have been saved to the [bold]config[/bold] folder.[/green]")
     console.print(f"Initialization complete! You can now run [bold]scaletrail preview[/bold] and [bold]scaletrail deploy[/bold] to preview and deploy your infrastructure.")
 
-# Other commands will not show the banner
 @app.command()
 def run():
     """Runs the application."""
     typer.echo("Running the application...")
+
+
+def _find_config_dir() -> Path:
+    cfg = Path.cwd() / "config"
+    if not cfg.exists() or not cfg.is_dir():
+        console.print("[red]No ./config directory found.[/red]")
+        raise typer.Exit(code=1)
+    return cfg
+
+
+def _list_env_configs(config_dir: Path) -> List[Path]:
+    return sorted(config_dir.glob("*-config.toml"))
+
+
+def _pick_env_file(candidates: List[Path]) -> Path:
+    if not candidates:
+        console.print("[red]No *-config.toml files found in ./config[/red]")
+        raise typer.Exit(code=1)
+    if len(candidates) == 1:
+        return candidates[0]
+
+    choices = [c.name for c in candidates]
+    answer = inquirer.prompt([
+        inquirer.List(
+            "cfg",
+            message="Select an environment to preview",
+            choices=choices,
+            carousel=True,
+        )
+    ])
+    if not answer or "cfg" not in answer:
+        raise typer.Exit(code=1)
+    return next(p for p in candidates if p.name == answer["cfg"])
+
+
+def _env_name_from_config_filename(config_path: Path) -> str:
+    # e.g., dev-config.toml -> dev
+    stem = config_path.name
+    if stem.endswith("-config.toml"):
+        return stem[:-len("-config.toml")]
+    return stem.replace(".toml", "")
+
+
+def _read_toml(path: Path) -> Dict[str, Any]:
+    try:
+        return parse(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        console.print(f"[red]Failed to parse TOML:[/red] {e}")
+        raise typer.Exit(code=1)
+
+
+def _read_env_file(env_path: Path) -> Dict[str, str]:
+    if not env_path.exists():
+        return {}
+
+    data: Dict[str, str] = {}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        if not line or line.strip().startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        data[key.strip()] = val.strip()
+    return data
+
+
+def _planned_dns_records(root: str, env_name: str) -> List[Dict[str, str]]:
+    records: List[Dict[str, str]] = []
+
+
+    # <env>-api.<root> for non-prod environments
+    if env_name and env_name.lower() not in ("prod", "production"):
+        records.append({
+            "Name": f"{env_name}-api.{root}",
+            "Type": "A",
+            "Content": "TBD (after create)",
+            "Proxy": "Proxied",
+            "TTL": "Auto",
+        })
+    else:
+        # api.<root>
+        records.append({
+            "Name": f"api.{root}",
+            "Type": "A",
+            "Content": "TBD (after create)",
+            "Proxy": "Proxied",
+            "TTL": "Auto",
+        })
+
+        # www CNAME → apex
+        records.append({
+            "Name": f"www.{root}",
+            "Type": "CNAME",
+            "Content": root,
+            "Proxy": "Proxied",
+            "TTL": "Auto",
+        })
+
+    return records
+
+def _linode_table(cfg: Dict[str, Any]) -> Table:
+    lin = cfg.get("linode", {})
+    env = cfg.get("environment", {})
+    proj = cfg.get("project", {})
+
+    table = Table(
+        title=f"Linode • Resources to be added • {proj.get('name','')} [{env.get('name','')}]",
+        box=box.SIMPLE_HEAVY,
+        show_header=True,
+        header_style="bold cyan",
+        expand=False,
+    )
+
+    table.add_column("Region", justify="center", style="bold")
+    table.add_column("Type", justify="center")
+    table.add_column("Image", justify="center")
+    table.add_column("Backups", justify="center")
+    table.add_column("Tags", justify="center")
+
+    table.add_row(
+        lin.get("region", "—"),
+        lin.get("instance_type", "—"),
+        lin.get("image", "—"),
+        "Yes" if lin.get("backups_enabled") else "No",
+        ", ".join(lin.get("tags", [])) or "—",
+    )
+
+    return table
+
+
+def _cloudflare_table(cfg: Dict[str, Any], env_name: str, env_vars: Dict[str, str]) -> Table:
+    cf = cfg.get("cloudflare", {})
+    domain = cfg.get("domain", {})
+    root = domain.get("root", "—")
+
+    table = Table(
+        title=f"Cloudflare • DNS records to be added • {root}",
+        box=box.SIMPLE_HEAVY,
+        show_header=True,
+        header_style="bold cyan",
+        expand=False,
+    )
+
+    table.add_column("Record", justify="left")
+    table.add_column("Type", justify="center")
+    table.add_column("Content", justify="left")
+    table.add_column("Proxy", justify="center")
+
+    # planned DNS
+    dns_records = _planned_dns_records(root, env_name)
+    for r in dns_records:
+        table.add_row(
+            r["Name"],
+            r["Type"],
+            r["Content"],
+            "🟠 proxied" if r["Proxy"] == "Proxied" else "⚪",
+        )
+
+    return table
+
+@app.command()
+def preview():
+    """Previews resources to be provisioned."""
+    try:
+        config_dir = _find_config_dir()
+        candidates = _list_env_configs(config_dir)
+        cfg_path = _pick_env_file(candidates)
+        env_name = _env_name_from_config_filename(cfg_path)
+        env_path = config_dir / f"{env_name}.env"
+
+        cfg = _read_toml(cfg_path)
+        env_vars = _read_env_file(env_path)
+
+        project_name = cfg.get("project", {}).get("name", "Unknown")
+        # _render_header(project_name, env_name)
+
+        # Linode section
+        console.print(_linode_table(cfg))
+        console.print("\n\n")
+
+        # Cloudflare section
+        console.print(_cloudflare_table(cfg, env_name, env_vars))
+        console.print("\n\n")
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Preview failed:[/red] {e}")
+        raise typer.Exit(code=1)
 
 if __name__ == "__main__":
     app()
