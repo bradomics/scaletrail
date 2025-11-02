@@ -18,6 +18,8 @@ from rich.panel import Panel
 
 from .utils import cloudflare, formatting, linode, env_file
 
+import subprocess, secrets, string
+
 load_dotenv()
 console = Console()
 app = typer.Typer()
@@ -503,6 +505,198 @@ def preview():
     except Exception as e:
         console.print(f"[red]Preview failed:[/red] {e}")
         raise typer.Exit(code=1)
+
+
+def _terraform_dir() -> Path:
+    # From /cli → /project/terraform
+    td = (Path.cwd().parent / "[project]" / "terraform").resolve()
+    if not td.exists():
+        console.print("[red]Could not find /project/terraform directory relative to the CLI folder.[/red]")
+        console.print(f"[dim]Looked for: {td}[/dim]")
+        raise typer.Exit(1)
+    return td
+
+def _run(cmd: list[str], cwd: Path):
+    console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+    subprocess.check_call(cmd, cwd=str(cwd))
+
+@app.command()
+def deploy():
+    """Deploys infrastructure with Terraform using the selected env's config."""
+    try:
+        # 1) pick env + read config
+        config_dir = _find_config_dir()
+        cfg_path = _pick_env_file(_list_env_configs(config_dir))
+        env_name = _env_name_from_config_filename(cfg_path)
+        cfg = _read_toml(cfg_path)
+
+        proj = cfg.get("project", {})
+        lin  = cfg.get("linode", {})
+        dom  = cfg.get("domain", {})
+
+        project_name = proj.get("name", "scaletrail-project")
+        region       = lin.get("region", "us-central")
+        instance     = lin.get("instance_type", "g6-standard-1")
+        image        = lin.get("image", "linode/ubuntu24.04")
+        backups      = bool(lin.get("backups_enabled", True))
+        tags         = lin.get("tags", []) or []
+        # add a couple of helpful tags
+        if project_name not in tags:
+            tags.append(project_name)
+        if dom.get("root"):
+            tag_candidate = f"api.{dom['root']}"
+            if tag_candidate not in tags:
+                tags.append(tag_candidate)
+
+        # 2) resolve credentials
+        linode_token = os.getenv("LINODE_API_KEY") or ""
+        if not linode_token:
+            console.print("[red]LINODE_API_KEY not found in environment. Run 'scaletrail init' first.[/red]")
+            raise typer.Exit(1)
+
+        # generate a strong root password if not already present in an env var
+        root_pass = os.getenv("SCALET_RAIL_ROOT_PASS") or "".join(
+            secrets.choice(string.ascii_letters + string.digits + "!@#$%^&*()-_=+")
+            for _ in range(24)
+        )
+
+        # 3) write Terraform files
+        tfdir = _terraform_dir()
+
+        main_tf = f'''terraform {{
+  required_providers {{
+    linode = {{
+      source  = "linode/linode"
+      version = "3.0.0"
+    }}
+  }}
+}}
+
+provider "linode" {{
+  token = var.linode_token
+}}
+
+resource "linode_instance" "scaletrail_project" {{
+  label           = "{project_name}-{env_name}"
+  region          = "{region}"
+  type            = "{instance}"
+  image           = "{image}"
+  tags            = {json.dumps(tags)}
+  root_pass       = var.root_pass
+  backups_enabled = {str(backups).lower()}
+
+  authorized_keys = [
+    trimspace(replace(file("~/.ssh/scaletrail_project.pub"), "\\n", ""))
+  ]
+}}
+
+# --- GitHub Actions IP chunking (unchanged) ---
+locals {{
+  gh_actions_ipv4_chunks = [
+    for i in range(0, length(var.gh_actions_ipv4), 255) :
+    slice(var.gh_actions_ipv4, i, min(i + 255, length(var.gh_actions_ipv4)))
+  ]
+
+  gh_actions_ipv6_chunks = [
+    for i in range(0, length(var.gh_actions_ipv6), 255) :
+    slice(var.gh_actions_ipv6, i, min(i + 255, length(var.gh_actions_ipv6)))
+  ]
+
+  gh_actions_ipv4_inbound_rules = [
+    for pair in local.gh_actions_ipv4_chunks : {{
+      label    = "gh-actions-ipv4-${{index(local.gh_actions_ipv4_chunks, pair)}}"
+      action   = "ACCEPT"
+      protocol = "TCP"
+      ports    = "22"
+      ipv4     = pair
+      ipv6     = null
+    }}
+  ]
+
+  gh_actions_ipv6_inbound_rules = [
+    for pair in local.gh_actions_ipv6_chunks : {{
+      label    = "gh-actions-ipv6-${{index(local.gh_actions_ipv6_chunks, pair)}}"
+      action   = "ACCEPT"
+      protocol = "TCP"
+      ports    = "22"
+      ipv4     = null
+      ipv6     = pair
+    }}
+  ]
+
+  gh_actions_inbound_rules = concat(
+    local.gh_actions_ipv4_inbound_rules,
+    local.gh_actions_ipv6_inbound_rules
+  )
+}}
+
+resource "linode_firewall" "scaletrail_project_firewall" {{
+  label = "{project_name}-{env_name}-fw"
+
+  dynamic "inbound" {{
+    for_each = concat(
+      var.developer_inbound_ips,
+      var.cloudflare_inbound_rules,
+      local.gh_actions_inbound_rules
+    )
+    content {{
+      label    = inbound.value.label
+      action   = inbound.value.action
+      protocol = inbound.value.protocol
+      ports    = inbound.value.ports
+      ipv4     = inbound.value.ipv4
+      ipv6     = inbound.value.ipv6
+    }}
+  }}
+
+  inbound_policy  = "DROP"
+  outbound_policy = "ACCEPT"
+  linodes         = [linode_instance.scaletrail_project.id]
+}}
+'''
+        (tfdir / "main.tf").write_text(main_tf, encoding="utf-8")
+
+        # keep secrets and optional arrays in a separate, gitignored tfvars file
+        sensitive_tfvars = f'''linode_token = "{linode_token}"
+root_pass   = "{root_pass}"
+
+# safe defaults; override later if/when you add rules
+gh_actions_ipv4        = []
+gh_actions_ipv6        = []
+cloudflare_inbound_rules = []
+project_inbound_rules    = []
+'''
+        (tfdir / "sensitive.tfvars").write_text(sensitive_tfvars, encoding="utf-8")
+
+        # 4) terraform init + workspace + apply
+        console.print(f"[bold cyan]Deploying[/bold cyan] [white]{project_name}[/white] → env [bold]{env_name}[/bold] in region [bold]{region}[/bold]")
+        _run(["terraform", "init"], tfdir)
+
+        # workspace per env
+        # create if missing; otherwise select
+        try:
+            _run(["terraform", "workspace", "new", env_name], tfdir)
+        except subprocess.CalledProcessError:
+            _run(["terraform", "workspace", "select", env_name], tfdir)
+
+        _run([
+            "terraform", "apply",
+            "-var-file=sensitive.tfvars",
+            "-var-file=terraform.tfvars",
+            "-auto-approve"
+        ], tfdir)
+
+        console.print("[green]Deploy complete.[/green]")
+
+    except typer.Exit:
+        raise
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Terraform failed with exit code {e.returncode}[/red]")
+        raise typer.Exit(code=e.returncode or 1)
+    except Exception as e:
+        console.print(f"[red]Deploy failed:[/red] {e}")
+        raise typer.Exit(1)
+
 
 if __name__ == "__main__":
     app()
